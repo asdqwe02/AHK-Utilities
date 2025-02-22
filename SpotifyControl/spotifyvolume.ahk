@@ -1,5 +1,5 @@
 ﻿#Requires AutoHotkey v2.0
-
+#Include %A_ScriptDir%\Plugins\GDIp_All.ahk
 
 global nircmdPath := A_ScriptDir . "\Plugins\nircmdc.exe"
 global spotifyIcon := A_ScriptDir . "\Icons\spotify_icon.png"
