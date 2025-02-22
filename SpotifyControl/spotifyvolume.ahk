@@ -5,14 +5,26 @@ global nircmdPath := A_ScriptDir . "\Plugins\nircmdc.exe"
 global spotifyIcon := A_ScriptDir . "\Icons\spotify_icon.png"
 
 global spotifyVolume := 20  
-global barWidth := 180, barHeight := 6  
-global overlayGui, progressBar, volText, hideTimer  
+global barWidth := 150, barHeight := 6  
+global overlayGui, volText, hideTimer, hbm, hdc, pGraphics, pBitmap, progressPic
+global bgColor := 0xFF9F9F9F, fillColor := 0xFF1CBB54  
+global rounding := barHeight // 2  
+
+; GUI Positioning
+global guiX := "xCenter", guiY := "y90"
+global iconX := 10, iconY := 5, iconW := 22, iconH := 23
+global progressX := 40, progressY := 12
+global textX := progressX + barWidth + 10, textY := 4, textW := 40, textH := 24
+
+global fontSize := "s14", fontStyle := "Bold", fontName := "Arial"
+
+global transparency := 255, hideDelay := 1500
 
 ; Initialize volume on script start
 InitSpotifyVolume()
 CreateVolumeOverlay()  
-F13::ChangeSpotifyVolume(-2)  ; Reduce by 2 instead of 5
-F14::ChangeSpotifyVolume(2)   ; Increase by 2 instead of 5
+F13::ChangeSpotifyVolume(-2)  
+F14::ChangeSpotifyVolume(2)   
 
 ChangeSpotifyVolume(step) {
     global spotifyVolume
@@ -42,38 +54,83 @@ Clamp(value, min, max) {
 }
 
 CreateVolumeOverlay() {
-    global overlayGui, progressBar, volText, hideTimer  
-
+    global overlayGui, volText, hideTimer, hbm, hdc, pGraphics, pBitmap, progressPic  
+    
     overlayGui := Gui("+AlwaysOnTop -Caption +ToolWindow +Border")  
     overlayGui.BackColor := "0x2C2C2C"  
 
     if FileExist(spotifyIcon) {
-        overlayGui.Add("Picture", "x10 y5 w22 h23", spotifyIcon)  
+        overlayGui.Add("Picture", Format("x{} y{} w{} h{}", iconX, iconY, iconW, iconH), spotifyIcon)  
     }
 
-    progressBar := overlayGui.Add("Progress", "x40 y14 w" barWidth " h" barHeight " Background0x9F9F9F")  
-    progressBar.Opt("+Smooth")  
-    DllCall("SendMessage", "Ptr", progressBar.Hwnd, "UInt", 0x409, "Ptr", 0, "UInt", 0x54BB1C)  
+    if !Gdip_Startup() {
+        MsgBox("Failed to initialize GDI+!")
+        ExitApp()
+    }
 
-    volText := overlayGui.Add("Text", "x" (40 + barWidth + 10) " y4 w40 h24 cWhite Center +0x200", spotifyVolume)
-    volText.SetFont("s14 Bold", "Arial")  
+    hbm := CreateDIBSection(barWidth, barHeight)
+    hdc := CreateCompatibleDC()
+    SelectObject(hdc, hbm)
+    pBitmap := Gdip_CreateBitmapFromHBITMAP(hbm)
+    pGraphics := Gdip_GraphicsFromImage(pBitmap)
+    Gdip_SetSmoothingMode(pGraphics, 4)  ; Higher quality anti-aliasing
 
-    overlayGui.Show("xCenter y90 NoActivate")  
-    WinSetTransparent(255, overlayGui)  
+    progressPic := overlayGui.Add("Picture", Format("x{} y{} w{} h{}", progressX, progressY, barWidth, barHeight))
+    
+    volText := overlayGui.Add("Text", Format("x{} y{} w{} h{} cWhite Center +0x200", textX, textY, textW, textH), spotifyVolume)
+    volText.SetFont(Format("{} {}", fontSize, fontStyle), fontName)  
+
+    overlayGui.Show(Format("{} {} NoActivate", guiX, guiY))  
+    WinSetTransparent(transparency, overlayGui)  
 
     hideTimer := ObjBindMethod(overlayGui, "Hide")  
+
+    UpdateVolumeOverlay(spotifyVolume)  
 }
 
 UpdateVolumeOverlay(volume) {
-    global overlayGui, progressBar, volText, hideTimer  
+  global overlayGui, volText, hideTimer, hdc, pGraphics, pBitmap, hbm, barWidth, barHeight, rounding, bgColor, fillColor, progressPic  
 
-    progressBar.Value := volume  
+    ; Ensure the background is fully transparent
+    Gdip_GraphicsClear(pGraphics, 0x00000000)
+
+    ; Create brushes
+    hBgBrush := Gdip_BrushCreateSolid(bgColor) 
+    hFillBrush := Gdip_BrushCreateSolid(fillColor)
+
+    ; Ensure proper rounding calculation
+    effectiveRounding := Max(0, Min(rounding, Floor(barWidth) // 2))  ; Prevent invalid values
+
+    ; Draw background with improved transparency and rounded edges
+    Gdip_FillRoundedRectangle(pGraphics, hBgBrush, 0, 0, barWidth, barHeight, effectiveRounding)
+
+    ; Calculate filled width
+    fillWidth := (volume / 100) * barWidth
+    effectiveFillRounding := Max(0, Min(rounding, Floor(fillWidth) // 2))  ; Keep smooth edges
+
+    ; Draw filled section with better rounding
+    if fillWidth > 2 * effectiveFillRounding {
+        Gdip_FillRoundedRectangle(pGraphics, hFillBrush, 0, 0, fillWidth, barHeight, effectiveFillRounding)
+    } else {
+        Gdip_FillEllipse(pGraphics, hFillBrush, 0, 0, fillWidth, barHeight)  ; Use ellipse if very small
+    }
+
+    ; Update GUI with new image
+    hbmNew := Gdip_CreateHBITMAPFromBitmap(pBitmap)
+    progressPic.Value := "HBITMAP:*" hbmNew  
+
+    ; Cleanup brushes
+    Gdip_DeleteBrush(hBgBrush)
+    Gdip_DeleteBrush(hFillBrush)
+    DeleteObject(hbmNew)
+
+    ; Update volume text
     volText.Text := volume  
 
-    SetTimer(hideTimer, 0)  ; Cancel previous hide timer  
+    ; Reset timer for hiding
+    SetTimer(hideTimer, 0)  
     overlayGui.Show("xCenter y90 NoActivate")  
-
-    SetTimer(hideTimer, -1500)  ; Hide after 1.5s of inactivity  
+    SetTimer(hideTimer, -1500)  
 }
 
 RunWaitOne(command) {
